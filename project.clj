@@ -9,7 +9,9 @@
   :dependencies [[org.clojure/clojure "1.7.0"]
                  [org.clojure/clojurescript "1.7.58"]
                  [cljsjs/react "0.13.3-1"]
-                 [reagent "0.5.0"]]
+                 [reagent "0.5.0"]
+                 [funcool/cats "0.6.1"]
+                 [funcool/promesa "0.4.0"]]
 
   :plugins [[lein-cljsbuild "1.0.6"]]
 
