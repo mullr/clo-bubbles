@@ -11,7 +11,8 @@
                  [cljsjs/react "0.13.3-1"]
                  [reagent "0.5.0"]
                  [funcool/cats "0.6.1"]
-                 [funcool/promesa "0.4.0"]]
+                 [funcool/promesa "0.4.0"]
+                 [org.clojure/tools.reader "0.10.0-alpha3"]]
 
   :plugins [[lein-cljsbuild "1.0.6"]]
 

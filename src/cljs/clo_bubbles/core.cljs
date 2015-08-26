@@ -3,13 +3,18 @@
             [cljsjs.react]
             [promesa.core :as p :refer [promise]]
             [cats.core :as m :refer [>>=]]
-            [cljs.reader :refer [read-string]])
+            [cljs.reader :refer [read-string]]
+            [cljs.tools.reader :as reader]
+            [cljs.tools.reader.reader-types :as reader-types])
   (:require-macros [cats.core :refer (mlet)]))
+
 
 (def nrepl-client (js/require "nrepl-client"))
 (def fs (js/require "fs"))
 
 (set! *print-fn* #(.log js/console %))
+
+;;; nrepl interaction
 
 (def conn
   (let [c (.connect nrepl-client #js {:port 7777})]
@@ -24,7 +29,6 @@
                         (resolve c))))))))
 
 (defn eval [c code]
-  (println "evaling" code)
   (promise
    (fn [resolve reject]
      (.eval c code
@@ -38,21 +42,44 @@
 (defn all-ns' [c]
   (eval c "(all-ns)"))
 
-(defn ns-map' [c ns]
-  (eval c (str "(ns-map '" ns ")")))
+(defn ns-map' [c ns-name]
+  (eval c (str "(ns-map '" ns-name ")")))
 
-(defn meta' [c var]
-  (eval c (str "(meta " var ")")))
+(defn meta' [c fn-name]
+  (eval c (str "(meta #'" fn-name ")")))
 
 (defn fn-info' [c fn-sym]
-  (>>= (eval c (str "(select-keys (meta #'" fn-sym ") "
-                    "[:name :doc :file :line :end-line :column :end-column])"))
-       read-string))
+  (>>= (eval c (str "(let [m (meta #'" fn-sym ")]"
+                    "  {:meta (select-keys m [:name :doc :file :line :column])"
+                    "   :file (str (.getResource (clojure.lang.RT/baseLoader) (:file m)))})"))
+       reader/read-string))
 
-(defn remove-file-uri-prefix [s]
-  (subs s 5))
+;;; source analysis
 
-(defn slurp [path]
+(defn read-all-forms [s]
+  (let [rdr (reader-types/indexing-push-back-reader s)]
+    (loop [forms []]
+      (let [form (reader/read {:eof nil :read-cond :preserve} rdr)]
+        (if form
+          (recur (conj forms form))
+          forms)))))
+
+(defn line-range [s first-line last-line]
+  (->> (clojure.string/split s \newline)
+       (drop (dec first-line))
+       (take (- last-line (dec first-line)))
+       (clojure.string/join \newline)))
+
+(defn source-of-top-level-form-at [content line column]
+  (let [top-level-forms (read-all-forms content)
+        top-level-meta (map meta top-level-forms)
+        matching-form-meta (->> top-level-meta
+                                (filter #(and (<= (:line %) line (:end-line %))
+                                              (<= (:column %) column (:end-column %))))
+                                first)]
+    (line-range content (:line matching-form-meta) (:end-line matching-form-meta))))
+
+(defn slurp' [path]
   (promise
    (fn [resolve reject]
      (.readFile fs path "utf8"
@@ -61,18 +88,17 @@
                     (reject (str "Error reading file" path ": " err))
                     (resolve data)))))))
 
-(defn line-range [s first-line last-line]
-  (->> (clojure.string/split s \newline)
-       (drop (dec first-line))
-       (take (- last-line (dec first-line)))
-       (clojure.string/join \newline)))
+(defn remove-file-uri-prefix [s]
+  (subs s 5))
 
-(defn fn-content [c fn-name]
+(defn fn-content' [c fn-name]
   (mlet [c conn
         info (fn-info' c fn-name)
         filename (promise (-> info :file remove-file-uri-prefix))
-        content (slurp filename)]
-    (line-range content (:line info) (:end-line info))))
+        content (slurp' filename)]
+    (source-of-top-level-form-at content (-> info :meta :line) (-> info :meta :column))))
+
+;;; UI
 
 (defn fn-content-view [c fn-name]
   (let [content (r/atom "")]
