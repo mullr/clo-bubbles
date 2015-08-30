@@ -6,10 +6,11 @@
             [cljs.reader :refer [read-string]]
             [cljs.tools.reader :as reader]
             [cljs.tools.reader.reader-types :as reader-types :refer [read-char get-line-number get-column-number]]
-            [cljs.core.async :refer [<! >! chan]])
+            [cljs.core.async :refer [<! >! chan]]
+            [cljs.core.match])
   (:require-macros [cats.core :refer [mlet]]
-                   [cljs.core.async.macros :refer [go]]))
-
+                   [cljs.core.async.macros :refer [go go-loop]]
+                   [cljs.core.match :refer [match]]))
 
 (def nrepl-client (js/require "nrepl-client"))
 (def fs (js/require "fs"))
@@ -61,16 +62,33 @@
 (defn fn-source' [conn fn-name]
   (eval' conn (str "(clojure.repl/source-fn '" fn-name ")")))
 
-;;; UI
+;;; Views
 
-(defn ns-list-view [conn]
-  (let [ns-list (r/atom [])]
+(defn el [id]
+  (.getElementById js/document id))
+
+(defn ns-list-view [conn ch]
+  (let [ns-list (r/atom [])
+        select-id (name (gensym 'select))]
     (go (reset! ns-list (<! (all-ns' conn))))
-
     (fn []
-      [:ul
-       (for [ns-name @ns-list]
-         [:li {:key (str ns-name)} (str ns-name)])])))
+      [:select {:id select-id :size 10
+                :on-change #(go (>! ch [:select-ns (.-value (el select-id))]))}
+       (for [ns-name (->> @ns-list (map str) sort)]
+         [:option {:key ns-name :value ns-name} ns-name])])))
+
+(defn ns-members-view [conn ns-name]
+  (let [current-ns (r/atom nil)
+        members (r/atom [])]
+    (fn [_ ns-name]
+      (when (not= ns-name @current-ns)
+        (reset! current-ns ns-name)
+        (go (reset! members (<! (ns-members' conn ns-name)))))
+      [:div
+       [:span "ns: " ns-name]
+       [:ul
+        (for [m @members]
+          [:li {:key (str m)} (str m)])]])))
 
 (defn fn-source-view [conn fn-name]
   (let [source (r/atom "")]
@@ -80,33 +98,35 @@
        [:span "fn: " fn-name]
        [:div [:pre @source]]])))
 
-(defn ns-members-view [conn ns-name]
-  (let [members (r/atom [])]
-    (go (reset! members (<! (ns-members' conn ns-name))))
-    (fn []
-      [:div
-       [:span "ns: " ns-name]
-       [:ul
-        (for [m @members]
-          [:li {:key (str m)} (str m)])]])))
-
-(def state
-  (r/atom {:conn (connect 7777)
-           :ns-name "puppetlabs.puppetdb.catalogs"
-           :fn-name "puppetlabs.puppetdb.catalogs/full-catalog"}))
-
-(defn main-page
-  []
+(defn main-page [ch state]
   (let [{:keys [conn ns-name fn-name]} @state]
-   [:div
-    [:div [ns-list-view conn]]
-    [:div [ns-members-view conn ns-name]]
-    [:div [fn-source-view conn fn-name]]]))
+    [:div
+     [:div [ns-list-view conn ch]]
+     [:div [ns-members-view conn ns-name]]
+     [:div [fn-source-view conn fn-name]]]))
 
-(defn mount-root
-  []
-  (r/render [main-page] (.getElementById js/document "app")))
+;;; UI State
 
-(defn init!
-  []
-  (mount-root))
+(def initial-state
+  {:conn (connect 7777)
+   :ns-name "puppetlabs.puppetdb.catalogs"
+   :fn-name "puppetlabs.puppetdb.catalogs/full-catalog"})
+
+(defn handle-command [cmd state]
+  (match [cmd]
+    [[:select-ns ns-name]] (assoc state :ns-name ns-name)))
+
+(defn process-commands [ch state]
+  (go-loop []
+    (swap! state (partial handle-command (<! ch)))
+    (recur)))
+
+(def state (r/atom initial-state))
+
+(defn mount-root []
+  (let [ch (chan)]
+    (process-commands ch state)
+    (r/render [main-page ch state]
+              (.getElementById js/document "app"))))
+
+(defn init! [] (mount-root))
