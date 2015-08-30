@@ -5,7 +5,7 @@
             [cats.core :as m :refer [>>=]]
             [cljs.reader :refer [read-string]]
             [cljs.tools.reader :as reader]
-            [cljs.tools.reader.reader-types :as reader-types])
+            [cljs.tools.reader.reader-types :as reader-types :refer [read-char get-line-number get-column-number]])
   (:require-macros [cats.core :refer (mlet)]))
 
 
@@ -48,68 +48,36 @@
 (defn meta' [c fn-name]
   (eval c (str "(meta #'" fn-name ")")))
 
-(defn fn-info' [c fn-sym]
-  (>>= (eval c (str "(let [m (meta #'" fn-sym ")]"
-                    "  {:meta (select-keys m [:name :doc :file :line :column])"
-                    "   :file (str (.getResource (clojure.lang.RT/baseLoader) (:file m)))})"))
+(defn fn-source' [c fn-name]
+  (>>= (eval c (str "(clojure.repl/source-fn '" fn-name ")"))
        reader/read-string))
 
-;;; source analysis
+(defn fn-info' [c fn-name]
+  (>>= (eval c (str "(let [m (meta #'" fn-name ")]"
+                    "  {:meta (select-keys m [:name :doc :file :line :column])"
+                    "   :file (str (.getResource (clojure.lang.RT/baseLoader) (:file m)))})"))
+       reader/read))
 
-(defn read-all-forms [s]
-  (let [rdr (reader-types/indexing-push-back-reader s)]
-    (loop [forms []]
-      (let [form (reader/read {:eof nil :read-cond :preserve} rdr)]
-        (if form
-          (recur (conj forms form))
-          forms)))))
-
-(defn line-range [s first-line last-line]
-  (->> (clojure.string/split s \newline)
-       (drop (dec first-line))
-       (take (- last-line (dec first-line)))
-       (clojure.string/join \newline)))
-
-(defn source-of-top-level-form-at [content line column]
-  (let [top-level-forms (read-all-forms content)
-        top-level-meta (map meta top-level-forms)
-        matching-form-meta (->> top-level-meta
-                                (filter #(and (<= (:line %) line (:end-line %))
-                                              (<= (:column %) column (:end-column %))))
-                                first)]
-    (line-range content (:line matching-form-meta) (:end-line matching-form-meta))))
-
-(defn slurp' [path]
-  (promise
-   (fn [resolve reject]
-     (.readFile fs path "utf8"
-                (fn [err data]
-                  (if err
-                    (reject (str "Error reading file" path ": " err))
-                    (resolve data)))))))
-
-(defn remove-file-uri-prefix [s]
-  (subs s 5))
-
-(defn fn-content' [c fn-name]
-  (mlet [c conn
-        info (fn-info' c fn-name)
-        filename (promise (-> info :file remove-file-uri-prefix))
-        content (slurp' filename)]
-    (source-of-top-level-form-at content (-> info :meta :line) (-> info :meta :column))))
+(defn ns-member-info' [c ns-name]
+  (>>= (eval c (str "(for [var-in-ns (vals (ns-map '" ns-name "))]"
+                    "  (let [m (meta var-in-ns)]"
+                    "    {:meta (select-keys m [:name :doc :file :line :column])"
+                    "     :file (str (.getResource (clojure.lang.RT/baseLoader) (:file m)))}))"))
+       reader/read))
 
 ;;; UI
 
 (defn fn-content-view [c fn-name]
   (let [content (r/atom "")]
     (fn []
-      (>>= (fn-content c fn-name)
+      (>>= c
+           #(fn-source' % fn-name)
            (partial reset! content))
       [:div [:pre @content]])))
 
 (def state
   (r/atom {:conn nil
-           :fn "puppetlabs.puppetdb.cli.services/initialize-schema"}))
+           :fn "puppetlabs.puppetdb.catalogs/full-catalog"}))
 
 (defn main-page
   []
