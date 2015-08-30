@@ -16,8 +16,8 @@
 
 ;;; nrepl interaction
 
-(def conn
-  (let [c (.connect nrepl-client #js {:port 7777})]
+(defn connect [port]
+  (let [c (.connect nrepl-client #js {:port port})]
     (promise (fn [resolve reject]
                (.on c "error"
                     (fn [err]
@@ -34,22 +34,21 @@
      (.eval c code
             (fn [err response]
               (if err
-                (reject (str "Error evaluating: " err))
+                (str "Error evaluating: " err)
                 (resolve (-> (js->clj response)
                              first
                              (get "value")))))))))
 
-(defn all-ns' [c]
-  (eval c "(all-ns)"))
-
-(defn ns-map' [c ns-name]
-  (eval c (str "(ns-map '" ns-name ")")))
-
-(defn meta' [c fn-name]
-  (eval c (str "(meta #'" fn-name ")")))
-
 (defn fn-source' [c fn-name]
   (>>= (eval c (str "(clojure.repl/source-fn '" fn-name ")"))
+       reader/read-string))
+
+(defn ns-members' [c ns-name]
+  (>>= (eval c (str
+                "(->> (ns-map 'clojure.repl)"
+                "     (filter #(and (instance? clojure.lang.Var (second %))"
+                "                   (= (.ns (second %)) (the-ns 'clojure.repl))))"
+                "     (map first))"))
        reader/read-string))
 
 (defn fn-info' [c fn-name]
@@ -67,23 +66,36 @@
 
 ;;; UI
 
-(defn fn-content-view [c fn-name]
+(defn fn-source-view [c' fn-name]
   (let [content (r/atom "")]
+    (>>= c'
+         #(fn-source' % fn-name)
+         (partial reset! content))
     (fn []
-      (>>= c
-           #(fn-source' % fn-name)
-           (partial reset! content))
       [:div [:pre @content]])))
 
+(defn ns-members-view [c' ns-name]
+  (let [members (r/atom [])]
+    (>>= c'
+         #(ns-members' % ns-name)
+         (partial reset! members))
+    (fn []
+      [:ul
+       (for [m @members]
+         [:li {:key (str m)} (str m)])])))
+
+
 (def state
-  (r/atom {:conn nil
-           :fn "puppetlabs.puppetdb.catalogs/full-catalog"}))
+  (r/atom {:conn' (connect 7777)
+           :ns-name "puppetlabs.puppetdb.catalogs"
+           :fn-name "puppetlabs.puppetdb.catalogs/full-catalog"}))
 
 (defn main-page
   []
-  [:div
-   [:span "fn:" (:fn @state)]
-   [:div [fn-content-view conn (:fn @state)]]])
+  (let [{:keys [conn' ns-name]} @state]
+   [:div
+    [:span "ns:" ns-name]
+    [:div [ns-members-view conn' ns-name]]]))
 
 (defn mount-root
   []
