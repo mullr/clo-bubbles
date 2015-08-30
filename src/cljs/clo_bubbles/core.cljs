@@ -45,8 +45,10 @@
                               reader/read-string)))))))
    ch))
 
-(defn fn-source' [conn fn-name]
-  (eval' conn (str "(clojure.repl/source-fn '" fn-name ")")))
+;;; clj introspection
+
+(defn all-ns' [conn]
+  (eval' conn "(map ns-name (all-ns))"))
 
 (defn ns-members' [conn ns-name]
   (eval' conn
@@ -55,22 +57,38 @@
               "       (filter #(and (instance? clojure.lang.Var (second %))"
               "                     (= (.ns (second %)) ns)))"
               "       (map first)))")))
+
+(defn fn-source' [conn fn-name]
+  (eval' conn (str "(clojure.repl/source-fn '" fn-name ")")))
+
 ;;; UI
+
+(defn ns-list-view [conn]
+  (let [ns-list (r/atom [])]
+    (go (reset! ns-list (<! (all-ns' conn))))
+
+    (fn []
+      [:ul
+       (for [ns-name @ns-list]
+         [:li {:key (str ns-name)} (str ns-name)])])))
 
 (defn fn-source-view [conn fn-name]
   (let [source (r/atom "")]
     (go (reset! source (<! (fn-source' conn fn-name))))
     (fn []
-      [:div [:pre @source]])))
+      [:div
+       [:span "fn: " fn-name]
+       [:div [:pre @source]]])))
 
 (defn ns-members-view [conn ns-name]
   (let [members (r/atom [])]
     (go (reset! members (<! (ns-members' conn ns-name))))
-
     (fn []
-      [:ul
-       (for [m @members]
-         [:li {:key (str m)} (str m)])])))
+      [:div
+       [:span "ns: " ns-name]
+       [:ul
+        (for [m @members]
+          [:li {:key (str m)} (str m)])]])))
 
 (def state
   (r/atom {:conn (connect 7777)
@@ -81,7 +99,7 @@
   []
   (let [{:keys [conn ns-name fn-name]} @state]
    [:div
-    [:span "ns:" ns-name]
+    [:div [ns-list-view conn]]
     [:div [ns-members-view conn ns-name]]
     [:div [fn-source-view conn fn-name]]]))
 
