@@ -37,7 +37,7 @@
         #(.eval % code
                 (fn [err response]
                   (if err
-                    (throw (str "Error evaluating: " err))
+                    (throw (js/Error (str "Error evaluating: " err)))
                     (go
                       (>! ch
                           (-> (js->clj response)
@@ -67,65 +67,72 @@
 (defn el [id]
   (.getElementById js/document id))
 
-(defn ns-list-view [conn ch]
-  (let [ns-list (r/atom [])
-        select-id (name (gensym 'select))]
-    (go (reset! ns-list (<! (all-ns' conn))))
-    (fn []
-      [:select {:id select-id :size 10
-                :on-change #(go (>! ch [:select-ns (.-value (el select-id))]))}
-       (for [ns-name (->> @ns-list (map str) sort)]
-         [:option {:key ns-name :value ns-name} ns-name])])))
+(defn ns-list-view [ch namespaces]
+  (let [select-id (name (gensym 'ns-list))]
+    [:select {:id select-id
+              :size 10
+              :on-change #(go (>! ch [:select-ns (.-value (el select-id))]))}
+     (for [ns-name (->> namespaces (map str) sort)]
+       [:option {:key ns-name :value ns-name} ns-name])]))
 
-(defn ns-members-view [conn ns-name]
-  (let [current-ns (r/atom nil)
-        members (r/atom [])]
-    (fn [_ ns-name]
-      (when (not= ns-name @current-ns)
-        (reset! current-ns ns-name)
-        (go (reset! members (<! (ns-members' conn ns-name)))))
-      [:div
-       [:span "ns: " ns-name]
-       [:ul
-        (for [m @members]
-          [:li {:key (str m)} (str m)])]])))
+(defn ns-members-view [ch {ns-name :name members :members}]
+  (let [select-id (name (gensym 'ns-members))]
+    [:div
+     [:div "ns: " ns-name]
+     [:select {:id select-id
+               :size 10
+               :on-change #(go (>! ch [:select-fn (str ns-name "/"
+                                                       (.-value (el select-id)))]))}
+      (for [m members]
+        [:option {:key (str m)} (str m)])]]))
 
-(defn fn-source-view [conn fn-name]
-  (let [source (r/atom "")]
-    (go (reset! source (<! (fn-source' conn fn-name))))
-    (fn []
-      [:div
-       [:span "fn: " fn-name]
-       [:div [:pre @source]]])))
+(defn fn-source-view [{fn-name :name source :source}]
+  [:div
+   [:span "fn: " fn-name]
+   [:div [:pre source]]])
 
 (defn main-page [ch state]
-  (let [{:keys [conn ns-name fn-name]} @state]
+  (let [{:keys [namespaces selected-ns selected-fn]} @state]
     [:div
-     [:div [ns-list-view conn ch]]
-     [:div [ns-members-view conn ns-name]]
-     [:div [fn-source-view conn fn-name]]]))
+     [:div [ns-list-view ch namespaces]]
+     [:div [ns-members-view ch selected-ns]]
+     [:div [fn-source-view selected-fn]]]))
 
 ;;; UI State
 
 (def initial-state
   {:conn (connect 7777)
-   :ns-name "puppetlabs.puppetdb.catalogs"
-   :fn-name "puppetlabs.puppetdb.catalogs/full-catalog"})
+   :namespaces []
+   :selected-ns {:name nil :members nil}
+   :selected-fn {:name nil :source nil}})
 
 (defn handle-command [cmd state]
-  (match [cmd]
-    [[:select-ns ns-name]] (assoc state :ns-name ns-name)))
+  (println "command" cmd)
+  (let [conn (:conn @state)]
+   (match [cmd]
+          [[:select-ns ns-name]] (do (swap! state assoc-in [:selected-ns :name] ns-name)
+                                     (go (swap! state assoc-in [:selected-ns :members]
+                                                (<! (ns-members' conn ns-name)))))
+          [[:select-fn fn-name]] (do (swap! state assoc-in [:selected-fn :name] fn-name)
+                                     (go (swap! state assoc-in [:selected-fn :source]
+                                                (<! (fn-source' conn fn-name))))))))
 
 (defn process-commands [ch state]
   (go-loop []
-    (swap! state (partial handle-command (<! ch)))
+    (try
+      (handle-command (<! ch) state)
+      (catch :default e
+        (println "Error:" e)))
     (recur)))
 
 (def state (r/atom initial-state))
 
 (defn mount-root []
-  (let [ch (chan)]
+  (let [ch (chan)
+        conn (:conn @state)]
     (process-commands ch state)
+    (go (swap! state assoc :namespaces (<! (all-ns' conn))))
+    (go (>! ch [:select-ns "puppetlabs.puppetdb.catalogs"]))
     (r/render [main-page ch state]
               (.getElementById js/document "app"))))
 
