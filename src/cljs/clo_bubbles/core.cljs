@@ -5,8 +5,10 @@
             [cats.core :as m :refer [>>=]]
             [cljs.reader :refer [read-string]]
             [cljs.tools.reader :as reader]
-            [cljs.tools.reader.reader-types :as reader-types :refer [read-char get-line-number get-column-number]])
-  (:require-macros [cats.core :refer (mlet)]))
+            [cljs.tools.reader.reader-types :as reader-types :refer [read-char get-line-number get-column-number]]
+            [cljs.core.async :refer [<! >! chan]])
+  (:require-macros [cats.core :refer [mlet]]
+                   [cljs.core.async.macros :refer [go]]))
 
 
 (def nrepl-client (js/require "nrepl-client"))
@@ -28,74 +30,60 @@
                         (reject (str "Error in nrepl client connection" err))
                         (resolve c))))))))
 
-(defn eval [c code]
-  (promise
-   (fn [resolve reject]
-     (.eval c code
-            (fn [err response]
-              (if err
-                (str "Error evaluating: " err)
-                (resolve (-> (js->clj response)
-                             first
-                             (get "value")))))))))
+(defn eval' [conn code]
+  (let [ch (chan)]
+   (>>= conn
+        #(.eval % code
+                (fn [err response]
+                  (if err
+                    (throw (str "Error evaluating: " err))
+                    (go
+                      (>! ch
+                          (-> (js->clj response)
+                              first
+                              (get "value")
+                              reader/read-string)))))))
+   ch))
 
-(defn fn-source' [c fn-name]
-  (>>= (eval c (str "(clojure.repl/source-fn '" fn-name ")"))
-       reader/read-string))
+(defn fn-source' [conn fn-name]
+  (eval' conn (str "(clojure.repl/source-fn '" fn-name ")")))
 
-(defn ns-members' [c ns-name]
-  (>>= (eval c (str
-                "(->> (ns-map 'clojure.repl)"
-                "     (filter #(and (instance? clojure.lang.Var (second %))"
-                "                   (= (.ns (second %)) (the-ns 'clojure.repl))))"
-                "     (map first))"))
-       reader/read-string))
-
-(defn fn-info' [c fn-name]
-  (>>= (eval c (str "(let [m (meta #'" fn-name ")]"
-                    "  {:meta (select-keys m [:name :doc :file :line :column])"
-                    "   :file (str (.getResource (clojure.lang.RT/baseLoader) (:file m)))})"))
-       reader/read))
-
-(defn ns-member-info' [c ns-name]
-  (>>= (eval c (str "(for [var-in-ns (vals (ns-map '" ns-name "))]"
-                    "  (let [m (meta var-in-ns)]"
-                    "    {:meta (select-keys m [:name :doc :file :line :column])"
-                    "     :file (str (.getResource (clojure.lang.RT/baseLoader) (:file m)))}))"))
-       reader/read))
-
+(defn ns-members' [conn ns-name]
+  (eval' conn
+         (str "(let [ns (the-ns '" ns-name ")]"
+              "  (->> (ns-map ns)"
+              "       (filter #(and (instance? clojure.lang.Var (second %))"
+              "                     (= (.ns (second %)) ns)))"
+              "       (map first)))")))
 ;;; UI
 
-(defn fn-source-view [c' fn-name]
-  (let [content (r/atom "")]
-    (>>= c'
-         #(fn-source' % fn-name)
-         (partial reset! content))
+(defn fn-source-view [conn fn-name]
+  (let [source (r/atom "")]
+    (go (reset! source (<! (fn-source' conn fn-name))))
     (fn []
-      [:div [:pre @content]])))
+      [:div [:pre @source]])))
 
-(defn ns-members-view [c' ns-name]
+(defn ns-members-view [conn ns-name]
   (let [members (r/atom [])]
-    (>>= c'
-         #(ns-members' % ns-name)
-         (partial reset! members))
+    (go (reset! members (<! (ns-members' conn ns-name))))
+
     (fn []
       [:ul
        (for [m @members]
          [:li {:key (str m)} (str m)])])))
 
-
 (def state
-  (r/atom {:conn' (connect 7777)
+  (r/atom {:conn (connect 7777)
            :ns-name "puppetlabs.puppetdb.catalogs"
            :fn-name "puppetlabs.puppetdb.catalogs/full-catalog"}))
 
 (defn main-page
   []
-  (let [{:keys [conn' ns-name]} @state]
+  (let [{:keys [conn ns-name fn-name]} @state]
    [:div
     [:span "ns:" ns-name]
-    [:div [ns-members-view conn' ns-name]]]))
+    [:div [ns-members-view conn ns-name]]
+    [:div [fn-source-view conn fn-name]]]))
 
 (defn mount-root
   []
