@@ -62,7 +62,7 @@
 (defn fn-source' [conn fn-name]
   (eval' conn (str "(clojure.repl/source-fn '" fn-name ")")))
 
-;;; Views
+;;; ns browser prototype
 
 (defn el [id]
   (.getElementById js/document id))
@@ -98,24 +98,99 @@
      [:div [ns-members-view ch selected-ns]]
      [:div [fn-source-view selected-fn]]]))
 
+;;; workspace UI
+
+(defmulti item-view (fn [ch item] (:type item)))
+
+(def non-selectable
+  {:cursor :default
+   :-webkit-touch-callout :none
+   :-webkit-user-select :none
+   :-khtml-user-select :none
+   :-moz-user-select :none
+   :-ms-user-select :none
+   :user-select :none})
+
+(defn px [x]
+  (str x "px"))
+
+(defn place [[left top] [width height]]
+  {:position :absolute
+   :left (-> left px)
+   :top (-> top px)
+   :width (-> width px)
+   :height (-> height px)})
+
+(defn client-point [ev] [(.-clientX ev) (.-clientY ev)])
+
+(defmethod item-view :note [ch {:keys [id]}]
+  (let [dragging (r/atom false)
+        drag-handle-offset (r/atom [0 0])
+        dragging-position (r/atom nil)
+        div-id (name (gensym 'item-view))
+        on-mouse-move (fn [ev]
+                        (reset! dragging-position
+                                (mapv - (client-point ev) @drag-handle-offset))
+                        nil)
+        on-mouse-up (fn on-mouse-up [ev]
+                      (let [final-pos @dragging-position]
+                        (go (>! ch [:move-item-to id final-pos]))
+                        (reset! dragging false)
+                        (reset! dragging-position nil)
+                        (.removeEventListener js/window "mousemove" on-mouse-move)
+                        (.removeEventListener js/window "mouseup" on-mouse-up)
+                        nil))
+        on-mouse-down (fn [position ev]
+                        (reset! dragging true)
+                        (reset! drag-handle-offset (mapv - (client-point ev) position))
+                        (.addEventListener js/window "mousemove" on-mouse-move)
+                        (.addEventListener js/window "mouseup" on-mouse-up)
+                        nil)]
+    (fn [_ {:keys [text position size]}]
+      [:div {:id div-id
+             :style (merge non-selectable
+                           (place (if (and @dragging @dragging-position) @dragging-position position) size)
+                           {:border "1px solid black"
+                            :padding "3px"
+                            :cursor (if @dragging :move :default)})
+             :on-mouse-down (partial on-mouse-down position)}
+      text])))
+
+(defn workspace-view [ch state]
+  [:div
+   (for [[id item] @state]
+     [:div {:key (str "item-" id)}
+      [item-view ch (assoc item :id id)]])])
+
 ;;; UI State
 
 (def initial-state
   {:conn (connect 7777)
+   :workspace {1 {:type :note
+                  :text "Hello, world!"
+                  :position [50 50]
+                  :size [100 50]
+                  :dragging false}}
+
    :browser {:namespaces []
              :selected-ns {:name nil :members nil}
              :selected-fn {:name nil :source nil}}})
 
 (defn handle-command [cmd state]
-  (println "command" cmd)
   (let [conn (:conn @state)]
    (match [cmd]
+          ;; ns browser
           [[:select-ns ns-name]] (do (swap! state assoc-in [:browser :selected-ns :name] ns-name)
                                      (go (swap! state assoc-in [:browser :selected-ns :members]
                                                 (<! (ns-members' conn ns-name)))))
           [[:select-fn fn-name]] (do (swap! state assoc-in [:browser :selected-fn :name] fn-name)
                                      (go (swap! state assoc-in [:browser :selected-fn :source]
-                                                (<! (fn-source' conn fn-name))))))))
+                                                (<! (fn-source' conn fn-name)))))
+
+          ;; workspace
+          [[:start-moving-item id]] (swap! state assoc-in [:workspace id :dragging] true)
+          [[:stop-moving-item id]] (swap! state assoc-in [:workspace id :dragging] false)
+          [[:move-item-to id pos]] (swap! state assoc-in [:workspace id :position] pos))))
 
 (defn process-commands [ch state]
   (go-loop []
@@ -133,7 +208,9 @@
     (process-commands ch state)
     (go (swap! state assoc-in [:browser :namespaces] (<! (all-ns' conn))))
     (go (>! ch [:select-ns "puppetlabs.puppetdb.catalogs"]))
-    (r/render [browser ch (r/cursor state [:browser])]
-              (.getElementById js/document "app"))))
+    (r/render
+     [workspace-view ch (r/cursor state [:workspace])]
+     ;;[browser ch (r/cursor state [:browser])]
+     (.getElementById js/document "app"))))
 
 (defn init! [] (mount-root))
