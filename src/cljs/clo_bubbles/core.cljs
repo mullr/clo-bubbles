@@ -123,7 +123,7 @@
 
 (defn client-point [ev] [(.-clientX ev) (.-clientY ev)])
 
-(defmethod item-view :note [ch {:keys [id]}]
+(defn base-item [{:keys [ch] :as env} {:keys [id]} title content-fn]
   (let [dragging (r/atom false)
         drag-handle-offset (r/atom [0 0])
         dragging-position (r/atom nil)
@@ -146,70 +146,109 @@
                         (.addEventListener js/window "mousemove" on-mouse-move)
                         (.addEventListener js/window "mouseup" on-mouse-up)
                         nil)]
-    (fn [_ {:keys [text position size]}]
+    (fn [_ {:keys [position size] :as item-opts}]
       [:div {:id div-id
              :style (merge non-selectable
                            (place (if (and @dragging @dragging-position) @dragging-position position) size)
                            {:border "1px solid black"
-                            :padding "3px"
-                            :cursor (if @dragging :move :default)})
+                            :cursor (if @dragging :move :default)
+                            :background "white"})
              :on-mouse-down (partial on-mouse-down position)}
-      text])))
+       [:div {:style {:background "lightgrey"}}
+        title]
+       (content-fn item-opts)])))
 
-(defn workspace-view [ch state]
-  [:div
+(defmethod item-view :note [env item-opts]
+  (base-item env item-opts
+             "Note"
+             (fn [{:keys [text]}]
+               text)))
+
+(defn ellipsify [s max-len]
+  (if (> (.-length s) max-len)
+    (str (subs s 0 max-len) "…")
+    s))
+
+(defmethod item-view :namespaces [env item-opts]
+  (base-item env item-opts
+             "Namespaces"
+             (fn [{:keys [namespaces]}]
+               [:select {:size 10}
+                (for [ns-name (->> namespaces (map str)  sort)]
+                  [:option {:key ns-name :value ns-name} (ellipsify ns-name 40)])])))
+
+(defn workspace-view [{:keys [ch] :as env} state]
+  [:div {:style {:width "100%"
+                 :height "100%"}}
+   [:div {:style {:width "100%"
+                  :top "0"
+                  :background "lightgrey"
+                  :border "solid 1px grey"
+                  :padding "5px"
+                  :position "fixed"
+                  :z-index 1000}}
+    [:button {:on-click #(go
+                           (>! ch [:add-namespaces-item]))}
+     "namespaces" ]]
    (for [[id item] @state]
-     [:div {:key (str "item-" id)}
-      [item-view ch (assoc item :id id)]])])
+     [:div {:key (str "item-view-" id)}
+      [item-view env (assoc item :id id)]])])
 
 ;;; UI State
 
 (def initial-state
-  {:conn (connect 7777)
-   :workspace {1 {:type :note
+  {:workspace {1 {:type :note
                   :text "Hello, world!"
-                  :position [50 50]
-                  :size [100 50]
-                  :dragging false}}
+                  :position [250 50]
+                  :size [100 50]}}
 
    :browser {:namespaces []
              :selected-ns {:name nil :members nil}
              :selected-fn {:name nil :source nil}}})
 
-(defn handle-command [cmd state]
-  (let [conn (:conn @state)]
-   (match [cmd]
-          ;; ns browser
-          [[:select-ns ns-name]] (do (swap! state assoc-in [:browser :selected-ns :name] ns-name)
-                                     (go (swap! state assoc-in [:browser :selected-ns :members]
-                                                (<! (ns-members' conn ns-name)))))
-          [[:select-fn fn-name]] (do (swap! state assoc-in [:browser :selected-fn :name] fn-name)
-                                     (go (swap! state assoc-in [:browser :selected-fn :source]
-                                                (<! (fn-source' conn fn-name)))))
+(defn handle-command [{:keys [ch conn]} state cmd]
+  (match [cmd]
+         ;; ns browser
+         [[:select-ns ns-name]] (do (swap! state assoc-in [:browser :selected-ns :name] ns-name)
+                                    (go (swap! state assoc-in [:browser :selected-ns :members]
+                                               (<! (ns-members' conn ns-name)))))
+         [[:select-fn fn-name]] (do (swap! state assoc-in [:browser :selected-fn :name] fn-name)
+                                    (go (swap! state assoc-in [:browser :selected-fn :source]
+                                               (<! (fn-source' conn fn-name)))))
 
-          ;; workspace
-          [[:start-moving-item id]] (swap! state assoc-in [:workspace id :dragging] true)
-          [[:stop-moving-item id]] (swap! state assoc-in [:workspace id :dragging] false)
-          [[:move-item-to id pos]] (swap! state assoc-in [:workspace id :position] pos))))
+         ;; workspace
+         [[:start-moving-item id]] (swap! state assoc-in [:workspace id :dragging] true)
+         [[:stop-moving-item id]] (swap! state assoc-in [:workspace id :dragging] false)
+         [[:move-item-to id pos]] (swap! state assoc-in [:workspace id :position] pos)
 
-(defn process-commands [ch state]
+         [[:add-namespaces-item]] (let [item-id (name (gensym "item"))]
+                                    (swap! state assoc-in [:workspace item-id]
+                                           {:type :namespaces
+                                            :position [10 125]
+                                            :size ["auto" "auto"]
+                                            :namespaces []})
+                                    (go (swap! state assoc-in [:workspace item-id :namespaces]
+                                               (<! (all-ns' conn)))))))
+
+(defn process-commands [env state]
   (go-loop []
     (try
-      (handle-command (<! ch) state)
+      (handle-command env state (<! (:ch env)))
       (catch :default e
         (println "Error:" e)))
     (recur)))
 
-(def state (r/atom initial-state))
+(defonce state (r/atom initial-state))
 
 (defn mount-root []
   (let [ch (chan)
-        conn (:conn @state)]
-    (process-commands ch state)
-    (go (swap! state assoc-in [:browser :namespaces] (<! (all-ns' conn))))
+        conn (connect 7777)
+        env {:ch ch :conn conn}]
+    (process-commands env state)
+    ;; (go (swap! state assoc-in [:browser :namespaces] (<! (all-ns' conn))))
     (go (>! ch [:select-ns "puppetlabs.puppetdb.catalogs"]))
     (r/render
-     [workspace-view ch (r/cursor state [:workspace])]
+     [workspace-view env (r/cursor state [:workspace])]
      ;;[browser ch (r/cursor state [:browser])]
      (.getElementById js/document "app"))))
 
