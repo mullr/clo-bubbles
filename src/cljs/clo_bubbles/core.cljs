@@ -91,7 +91,7 @@
    [:span "fn: " fn-name]
    [:div [:pre source]]])
 
-(defn main-page [ch state]
+(defn browser [ch state]
   (let [{:keys [namespaces selected-ns selected-fn]} @state]
     [:div
      [:div [ns-list-view ch namespaces]]
@@ -102,19 +102,19 @@
 
 (def initial-state
   {:conn (connect 7777)
-   :namespaces []
-   :selected-ns {:name nil :members nil}
-   :selected-fn {:name nil :source nil}})
+   :browser {:namespaces []
+             :selected-ns {:name nil :members nil}
+             :selected-fn {:name nil :source nil}}})
 
 (defn handle-command [cmd state]
   (println "command" cmd)
   (let [conn (:conn @state)]
    (match [cmd]
-          [[:select-ns ns-name]] (do (swap! state assoc-in [:selected-ns :name] ns-name)
-                                     (go (swap! state assoc-in [:selected-ns :members]
+          [[:select-ns ns-name]] (do (swap! state assoc-in [:browser :selected-ns :name] ns-name)
+                                     (go (swap! state assoc-in [:browser :selected-ns :members]
                                                 (<! (ns-members' conn ns-name)))))
-          [[:select-fn fn-name]] (do (swap! state assoc-in [:selected-fn :name] fn-name)
-                                     (go (swap! state assoc-in [:selected-fn :source]
+          [[:select-fn fn-name]] (do (swap! state assoc-in [:browser :selected-fn :name] fn-name)
+                                     (go (swap! state assoc-in [:browser :selected-fn :source]
                                                 (<! (fn-source' conn fn-name))))))))
 
 (defn process-commands [ch state]
@@ -131,9 +131,9 @@
   (let [ch (chan)
         conn (:conn @state)]
     (process-commands ch state)
-    (go (swap! state assoc :namespaces (<! (all-ns' conn))))
+    (go (swap! state assoc-in [:browser :namespaces] (<! (all-ns' conn))))
     (go (>! ch [:select-ns "puppetlabs.puppetdb.catalogs"]))
-    (r/render [main-page ch state]
+    (r/render [browser ch (r/cursor state [:browser])]
               (.getElementById js/document "app"))))
 
 (defn init! [] (mount-root))
