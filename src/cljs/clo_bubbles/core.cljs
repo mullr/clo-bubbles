@@ -169,7 +169,7 @@
     (str (subs s 0 max-len) "…")
     s))
 
-(defmethod item-view :namespaces [env item-opts]
+(defmethod item-view :namespaces [{:keys [ch] :as env} item-opts]
   (base-item env item-opts
              "Namespaces"
              (fn [{:keys [namespaces]}]
@@ -177,7 +177,21 @@
                               :height "calc(100% - 1.5em)"}}
                 [:div {:style {:height "auto"}}
                  (for [ns-name (->> namespaces (map str)  sort)]
-                   [:div {:key ns-name} [:a (ellipsify ns-name 40)]])]])))
+                   [:div {:key ns-name}
+                    [:a {:on-click #(go (>! ch [:add-namespace-item ns-name]))}
+                     (ellipsify ns-name 40)]])]])))
+
+(defmethod item-view :namespace [{:keys [ch] :as env} {ns-name :name :as item-opts}]
+  (base-item env item-opts
+             ns-name
+             (fn [{:keys [members]}]
+               [:div {:style {:overflow-y "scroll"
+                              :height "calc(100% - 1.5em)"}}
+                [:div {:style {:height "auto"}}
+                 (for [fn-name members]
+                   [:div {:key fn-name}
+                    [:a {:on-click #(go (>! ch [:add-source-item (str ns-name "/" fn-name)]))}
+                     (str fn-name)]])]])))
 
 (defn workspace-view [{:keys [ch] :as env} state]
   [:div {:style {:width "100%"
@@ -223,14 +237,26 @@
          [[:stop-moving-item id]] (swap! state assoc-in [:workspace id :dragging] false)
          [[:move-item-to id pos]] (swap! state assoc-in [:workspace id :position] pos)
 
-         [[:add-namespaces-item]] (let [item-id (name (gensym "item"))]
-                                    (swap! state assoc-in [:workspace item-id]
-                                           {:type :namespaces
-                                            :position [10 125]
-                                            :size ["auto" "30em"]
-                                            :namespaces []})
-                                    (go (swap! state assoc-in [:workspace item-id :namespaces]
-                                               (<! (all-ns' conn)))))))
+         [[:add-namespaces-item]]
+         (let [item-id (name (gensym "item"))]
+           (swap! state assoc-in [:workspace item-id]
+                  {:type :namespaces
+                   :position [10 125]
+                   :size ["auto" "30em"]
+                   :namespaces []})
+           (go (swap! state assoc-in [:workspace item-id :namespaces]
+                      (<! (all-ns' conn)))))
+
+         [[:add-namespace-item ns-name]]
+         (let [item-id (name (gensym "item"))]
+           (swap! state assoc-in [:workspace item-id]
+                  {:type :namespace
+                   :position [10 125]
+                   :size ["auto" "30em"]
+                                           :name ns-name
+                   :members []})
+           (go (swap! state assoc-in [:workspace item-id :members]
+                      (<! (ns-members' conn ns-name)))))))
 
 (defn process-commands [env state]
   (go-loop []
