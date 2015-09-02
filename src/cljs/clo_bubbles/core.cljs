@@ -118,8 +118,8 @@
   {:position :absolute
    :left (-> left px)
    :top (-> top px)
-   :width (-> width px)
-   :height (-> height px)})
+   :width width
+   :height height})
 
 (defn client-point [ev] [(.-clientX ev) (.-clientY ev)])
 
@@ -173,9 +173,11 @@
   (base-item env item-opts
              "Namespaces"
              (fn [{:keys [namespaces]}]
-               [:select {:size 10}
-                (for [ns-name (->> namespaces (map str)  sort)]
-                  [:option {:key ns-name :value ns-name} (ellipsify ns-name 40)])])))
+               [:div {:style {:overflow-y "scroll"
+                              :height "calc(100% - 1.5em)"}}
+                [:div {:style {:height "auto"}}
+                 (for [ns-name (->> namespaces (map str)  sort)]
+                   [:div {:key ns-name} [:a (ellipsify ns-name 40)]])]])))
 
 (defn workspace-view [{:keys [ch] :as env} state]
   [:div {:style {:width "100%"
@@ -225,7 +227,7 @@
                                     (swap! state assoc-in [:workspace item-id]
                                            {:type :namespaces
                                             :position [10 125]
-                                            :size ["auto" "auto"]
+                                            :size ["auto" "30em"]
                                             :namespaces []})
                                     (go (swap! state assoc-in [:workspace item-id :namespaces]
                                                (<! (all-ns' conn)))))))
