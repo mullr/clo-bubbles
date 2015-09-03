@@ -62,42 +62,6 @@
 (defn fn-source' [conn fn-full-name]
   (eval' conn (str "(clojure.repl/source-fn '" fn-full-name ")")))
 
-;;; ns browser prototype
-
-(defn el [id]
-  (.getElementById js/document id))
-
-(defn ns-list-view [ch namespaces]
-  (let [select-id (name (gensym 'ns-list))]
-    [:select {:id select-id
-              :size 10
-              :on-change #(go (>! ch [:select-ns (.-value (el select-id))]))}
-     (for [ns-name (->> namespaces (map str) sort)]
-       [:option {:key ns-name :value ns-name} ns-name])]))
-
-(defn ns-members-view [ch {ns-name :name members :members}]
-  (let [select-id (name (gensym 'ns-members))]
-    [:div
-     [:div "ns: " ns-name]
-     [:select {:id select-id
-               :size 10
-               :on-change #(go (>! ch [:select-fn (str ns-name "/"
-                                                       (.-value (el select-id)))]))}
-      (for [m members]
-        [:option {:key (str m)} (str m)])]]))
-
-(defn fn-source-view [{fn-name :name source :source}]
-  [:div
-   [:span "fn: " fn-name]
-   [:div [:pre source]]])
-
-(defn browser [ch state]
-  (let [{:keys [namespaces selected-ns selected-fn]} @state]
-    [:div
-     [:div [ns-list-view ch namespaces]]
-     [:div [ns-members-view ch selected-ns]]
-     [:div [fn-source-view selected-fn]]]))
-
 ;;; workspace UI
 
 (defmulti item-view (fn [ch item] (:type item)))
@@ -227,24 +191,10 @@
                ;;    :text "Hello, world!"
                ;;    :position [250 50]
                ;;    :size [100 50]}
-               }
-
-   ;; :browser {:namespaces []
-   ;;           :selected-ns {:name nil :members nil}
-   ;;           :selected-fn {:name nil :source nil}}
-
-   })
+               }})
 
 (defn handle-command [{:keys [ch conn]} state cmd]
   (match [cmd]
-         ;; ns browser
-         [[:select-ns ns-name]] (do (swap! state assoc-in [:browser :selected-ns :name] ns-name)
-                                    (go (swap! state assoc-in [:browser :selected-ns :members]
-                                               (<! (ns-members' conn ns-name)))))
-         [[:select-fn fn-name]] (do (swap! state assoc-in [:browser :selected-fn :name] fn-name)
-                                    (go (swap! state assoc-in [:browser :selected-fn :source]
-                                               (<! (fn-source' conn fn-name)))))
-
          ;; workspace
          [[:start-moving-item id]] (swap! state assoc-in [:workspace id :dragging] true)
          [[:stop-moving-item id]] (swap! state assoc-in [:workspace id :dragging] false)
@@ -298,11 +248,8 @@
         conn (connect 7777)
         env {:ch ch :conn conn}]
     (process-commands env state)
-    ;; (go (swap! state assoc-in [:browser :namespaces] (<! (all-ns' conn))))
-    (go (>! ch [:select-ns "puppetlabs.puppetdb.catalogs"]))
     (r/render
      [workspace-view env (r/cursor state [:workspace])]
-     ;;[browser ch (r/cursor state [:browser])]
      (.getElementById js/document "app"))))
 
 (defn init! [] (mount-root))
