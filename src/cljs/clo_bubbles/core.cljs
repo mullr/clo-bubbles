@@ -87,7 +87,7 @@
 
 (defn client-point [ev] [(.-clientX ev) (.-clientY ev)])
 
-(defn base-item [{:keys [ch] :as env} {:keys [id]} title content-fn]
+(defn base-item [{:keys [ch] :as env} {id :id title :name} content-fn]
   (let [dragging (r/atom false)
         drag-handle-offset (r/atom [0 0])
         dragging-position (r/atom nil)
@@ -118,15 +118,14 @@
                             :cursor (if @dragging :move :default)
                             :background "white"})
              :on-mouse-down (partial on-mouse-down position)}
-       [:div {:style {:background "lightgrey"}}
-        title]
-       (content-fn item-opts)])))
-
-(defmethod item-view :note [env item-opts]
-  (base-item env item-opts
-             "Note"
-             (fn [{:keys [text]}]
-               text)))
+       [:div {:style {:background "lightgrey"
+                      :padding-left "3px"
+                      :padding-right "3px"}} title]
+       [:div {:style {:overflow-y "scroll"
+                      :height "calc(100% - 1.5em)"
+                      :padding-left "3px"
+                      :padding-right "3px"}}
+        (content-fn item-opts)]])))
 
 (defn workspace-view [{:keys [ch] :as env} state]
   [:div {:style {:width "100%"
@@ -140,7 +139,7 @@
                   :z-index 1000}}
     [:button {:on-click #(go
                            (>! ch [:add-namespaces-item]))}
-     "namespaces" ]]
+     "namespaces"]]
    (for [[id item] @state]
      [:div {:key (str "item-view-" id)}
       [item-view env (assoc item :id id)]])])
@@ -152,46 +151,33 @@
 
 (defmethod item-view :namespaces [{:keys [ch] :as env} item-opts]
   (base-item env item-opts
-             "Namespaces"
              (fn [{:keys [namespaces]}]
-               [:div {:style {:overflow-y "scroll"
-                              :height "calc(100% - 1.5em)"}}
-                [:div {:style {:height "auto"}}
-                 (for [ns-name (->> namespaces (map str)  sort)]
-                   [:div {:key ns-name}
-                    [:a {:on-click #(go (>! ch [:add-namespace-item ns-name]))}
-                     (ellipsify ns-name 40)]])]])))
+               [:div {:style {:height "auto"}}
+                (for [ns-name (->> namespaces (map str)  sort)]
+                  [:div {:key ns-name}
+                   [:a {:on-click #(go (>! ch [:add-namespace-item ns-name]))}
+                    (ellipsify ns-name 40)]])])))
 
 (defmethod item-view :namespace [{:keys [ch] :as env} {ns-name :name :as item-opts}]
   (base-item env item-opts
-             ns-name
              (fn [{:keys [members]}]
-               [:div {:style {:overflow-y "scroll"
-                              :height "calc(100% - 1.5em)"}}
-                [:div {:style {:height "auto"}}
-                 (for [fn-name members]
-                   [:div {:key fn-name}
-                    [:a {:on-click #(go (>! ch [:add-function-item ns-name fn-name]))}
-                     (str fn-name)]])]])))
+               [:div {:style {:height "auto"}}
+                (for [fn-name members]
+                  [:div {:key fn-name}
+                   [:a {:on-click #(go (>! ch [:add-function-item ns-name fn-name]))}
+                    (str fn-name)]])])))
 
 (defmethod item-view :function [{:keys [ch] :as env} {fn-name :name :as item-opts}]
   (base-item env item-opts
-             fn-name
              (fn [{:keys [source]}]
-               [:div {:style {:overflow-y "scroll"
-                              :height "calc(100% - 1.5em)"}}
-                [:pre{:style {:height "auto"
-                              :margin 0}}
-                 source]])))
+               [:pre{:style {:height "auto"
+                             :margin "0 -3px 0 -3px"
+                             }}
+                source])))
 ;;; UI State
 
 (def initial-state
-  {:workspace {
-               ;; 1 {:type :note
-               ;;    :text "Hello, world!"
-               ;;    :position [250 50]
-               ;;    :size [100 50]}
-               }})
+  {:workspace {}})
 
 (defn handle-command [{:keys [ch conn]} state cmd]
   (match [cmd]
@@ -206,6 +192,7 @@
                   {:type :namespaces
                    :position [10 50]
                    :size ["auto" "30em"]
+                   :name "Namespaces"
                    :namespaces []})
            (go (swap! state assoc-in [:workspace item-id :namespaces]
                       (<! (all-ns' conn)))))
@@ -214,9 +201,9 @@
          (let [item-id (name (gensym "item"))]
            (swap! state assoc-in [:workspace item-id]
                   {:type :namespace
+                   :name ns-name
                    :position [300 100]
                    :size ["auto" "30em"]
-                   :name ns-name
                    :members []})
            (go (swap! state assoc-in [:workspace item-id :members]
                       (<! (ns-members' conn ns-name)))))
@@ -227,8 +214,8 @@
                   {:type :function
                    :position [500 150]
                    :size ["auto" "auto"]
-                   :namespace ns-name
                    :name (str fn-name)
+                   :namespace ns-name
                    :source ""})
            (go (swap! state assoc-in [:workspace item-id :source]
                       (<! (fn-source' conn (str ns-name "/" fn-name))))))))
