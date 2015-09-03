@@ -59,8 +59,8 @@
               "                     (= (.ns (second %)) ns)))"
               "       (map first)))")))
 
-(defn fn-source' [conn fn-name]
-  (eval' conn (str "(clojure.repl/source-fn '" fn-name ")")))
+(defn fn-source' [conn fn-full-name]
+  (eval' conn (str "(clojure.repl/source-fn '" fn-full-name ")")))
 
 ;;; ns browser prototype
 
@@ -164,6 +164,23 @@
              (fn [{:keys [text]}]
                text)))
 
+(defn workspace-view [{:keys [ch] :as env} state]
+  [:div {:style {:width "100%"
+                 :height "100%"}}
+   [:div {:style {:width "100%"
+                  :top "0"
+                  :background "lightgrey"
+                  :border "solid 1px grey"
+                  :padding "5px"
+                  :position "fixed"
+                  :z-index 1000}}
+    [:button {:on-click #(go
+                           (>! ch [:add-namespaces-item]))}
+     "namespaces" ]]
+   (for [[id item] @state]
+     [:div {:key (str "item-view-" id)}
+      [item-view env (assoc item :id id)]])])
+
 (defn ellipsify [s max-len]
   (if (> (.-length s) max-len)
     (str (subs s 0 max-len) "…")
@@ -190,37 +207,31 @@
                 [:div {:style {:height "auto"}}
                  (for [fn-name members]
                    [:div {:key fn-name}
-                    [:a {:on-click #(go (>! ch [:add-source-item (str ns-name "/" fn-name)]))}
+                    [:a {:on-click #(go (>! ch [:add-function-item ns-name fn-name]))}
                      (str fn-name)]])]])))
 
-(defn workspace-view [{:keys [ch] :as env} state]
-  [:div {:style {:width "100%"
-                 :height "100%"}}
-   [:div {:style {:width "100%"
-                  :top "0"
-                  :background "lightgrey"
-                  :border "solid 1px grey"
-                  :padding "5px"
-                  :position "fixed"
-                  :z-index 1000}}
-    [:button {:on-click #(go
-                           (>! ch [:add-namespaces-item]))}
-     "namespaces" ]]
-   (for [[id item] @state]
-     [:div {:key (str "item-view-" id)}
-      [item-view env (assoc item :id id)]])])
-
+(defmethod item-view :function [{:keys [ch] :as env} {fn-name :name :as item-opts}]
+  (base-item env item-opts
+             fn-name
+             (fn [{:keys [source]}]
+               [:div {:style {:overflow-y "scroll"
+                              :height "calc(100% - 1.5em)"}}
+                [:pre{:style {:height "auto"}} source]])))
 ;;; UI State
 
 (def initial-state
-  {:workspace {1 {:type :note
-                  :text "Hello, world!"
-                  :position [250 50]
-                  :size [100 50]}}
+  {:workspace {
+               ;; 1 {:type :note
+               ;;    :text "Hello, world!"
+               ;;    :position [250 50]
+               ;;    :size [100 50]}
+               }
 
-   :browser {:namespaces []
-             :selected-ns {:name nil :members nil}
-             :selected-fn {:name nil :source nil}}})
+   ;; :browser {:namespaces []
+   ;;           :selected-ns {:name nil :members nil}
+   ;;           :selected-fn {:name nil :source nil}}
+
+   })
 
 (defn handle-command [{:keys [ch conn]} state cmd]
   (match [cmd]
@@ -241,7 +252,7 @@
          (let [item-id (name (gensym "item"))]
            (swap! state assoc-in [:workspace item-id]
                   {:type :namespaces
-                   :position [10 125]
+                   :position [10 50]
                    :size ["auto" "30em"]
                    :namespaces []})
            (go (swap! state assoc-in [:workspace item-id :namespaces]
@@ -251,12 +262,24 @@
          (let [item-id (name (gensym "item"))]
            (swap! state assoc-in [:workspace item-id]
                   {:type :namespace
-                   :position [10 125]
+                   :position [300 100]
                    :size ["auto" "30em"]
-                                           :name ns-name
+                   :name ns-name
                    :members []})
            (go (swap! state assoc-in [:workspace item-id :members]
-                      (<! (ns-members' conn ns-name)))))))
+                      (<! (ns-members' conn ns-name)))))
+
+         [[:add-function-item ns-name fn-name]]
+         (let [item-id (name (gensym "item"))]
+           (swap! state assoc-in [:workspace item-id]
+                  {:type :function
+                   :position [500 150]
+                   :size ["auto" "30em"]
+                   :namespace ns-name
+                   :name (str fn-name)
+                   :source ""})
+           (go (swap! state assoc-in [:workspace item-id :source]
+                      (<! (fn-source' conn (str ns-name "/" fn-name))))))))
 
 (defn process-commands [env state]
   (go-loop []
