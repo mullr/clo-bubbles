@@ -216,7 +216,9 @@
              (fn [{:keys [source]}]
                [:div {:style {:overflow-y "scroll"
                               :height "calc(100% - 1.5em)"}}
-                [:pre{:style {:height "auto"}} source]])))
+                [:pre{:style {:height "auto"
+                              :margin 0}}
+                 source]])))
 ;;; UI State
 
 (def initial-state
@@ -274,7 +276,7 @@
            (swap! state assoc-in [:workspace item-id]
                   {:type :function
                    :position [500 150]
-                   :size ["auto" "30em"]
+                   :size ["auto" "auto"]
                    :namespace ns-name
                    :name (str fn-name)
                    :source ""})
