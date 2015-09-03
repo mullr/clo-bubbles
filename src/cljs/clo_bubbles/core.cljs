@@ -116,11 +116,12 @@
                            (place (if (and @dragging @dragging-position) @dragging-position position) size)
                            {:border "1px solid black"
                             :cursor (if @dragging :move :default)
-                            :background "white"})
-             :on-mouse-down (partial on-mouse-down position)}
+                            :background "white"})}
        [:div {:style {:background "lightgrey"
                       :padding-left "3px"
-                      :padding-right "3px"}} title]
+                      :padding-right "3px"}
+              :on-mouse-down (partial on-mouse-down position)}
+        title]
        [:div {:style {:overflow-y "scroll"
                       :height "calc(100% - 1.5em)"
                       :padding-left "3px"
