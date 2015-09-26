@@ -6,10 +6,10 @@
             [cljs.reader :refer [read-string]]
             [cljs.tools.reader :as reader]
             [cljs.tools.reader.reader-types :as reader-types :refer [read-char get-line-number get-column-number]]
-            [cljs.core.async :refer [<! >! chan]]
+            [cljs.core.async :refer [<! >! chan timeout]]
             [cljs.core.match])
   (:require-macros [cats.core :refer [mlet]]
-                   [cljs.core.async.macros :refer [go go-loop]]
+                   [cljs.core.async.macros :refer [go go-loop alt!]]
                    [cljs.core.match :refer [match]]))
 
 (def nrepl-client (js/require "nrepl-client"))
@@ -150,14 +150,37 @@
     (str (subs s 0 max-len) "…")
     s))
 
+(defn debounce [out msec]
+  (let [c (chan)]
+    (go-loop [state :idle, last-message :nil]
+      (case state
+        :idle (when-let [msg (<! c)]
+                (recur :waiting msg))
+        :waiting (alt!
+                   c ([msg] (when msg
+                              (recur :waiting msg)))
+                   (timeout msec) (do (>! out last-message)
+                                      (recur :idle nil)))))
+    c))
+
 (defmethod item-view :namespaces [{:keys [ch] :as env} item-opts]
-  (base-item env item-opts
-             (fn [{:keys [namespaces]}]
-               [:div {:style {:height "auto"}}
-                (for [ns-name (->> namespaces (map str)  sort)]
-                  [:div {:key ns-name}
-                   [:a {:on-click #(go (>! ch [:add-namespace-item ns-name]))}
-                    (ellipsify ns-name 40)]])])))
+  (let [chdb (debounce ch 150)]
+    (base-item env item-opts
+               (fn [{:keys [id namespaces filter-text]}]
+                 [:div {:style {:height "auto"}}
+                  [:input {:type "text"
+                           :style {:width "100%"}
+                           :on-input (fn [ev] (let [value (-> ev .-target .-value)]
+                                                (go (>! chdb [:set-list-filter id value]))))}]
+                  (for [ns-name (->> namespaces
+                                     (map str)
+                                     (filter #(if filter-text
+                                                (not= -1 (.indexOf % filter-text))
+                                                true))
+                                     sort)]
+                    [:div {:key ns-name}
+                     [:a {:on-click #(go (>! ch [:add-namespace-item ns-name]))}
+                      (ellipsify ns-name 40)]])]))))
 
 (defmethod item-view :namespace [{:keys [ch] :as env} {ns-name :name :as item-opts}]
   (base-item env item-opts
@@ -181,6 +204,7 @@
   {:workspace {}})
 
 (defn handle-command [{:keys [ch conn]} state cmd]
+  (println cmd)
   (match [cmd]
          ;; workspace
          [[:start-moving-item id]] (swap! state assoc-in [:workspace id :dragging] true)
@@ -219,7 +243,10 @@
                    :namespace ns-name
                    :source ""})
            (go (swap! state assoc-in [:workspace item-id :source]
-                      (<! (fn-source' conn (str ns-name "/" fn-name))))))))
+                      (<! (fn-source' conn (str ns-name "/" fn-name))))))
+
+         [[:set-list-filter item-id filter-text]]
+         (swap! state assoc-in [:workspace item-id :filter-text] filter-text)))
 
 (defn process-commands [env state]
   (go-loop []
