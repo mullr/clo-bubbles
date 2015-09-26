@@ -80,10 +80,10 @@
 
 (defn place [[left top] [width height]]
   {:position :absolute
-   :left (-> left px)
-   :top (-> top px)
    :width width
-   :height height})
+   :height height
+   :transform (str "translate(" left "px," top "px)")})
+
 
 (defn client-point [ev] [(.-clientX ev) (.-clientY ev)])
 
